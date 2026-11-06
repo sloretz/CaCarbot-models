@@ -119,13 +119,29 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
             print("   Install via: uv run --extra compile cacarbot-models")
             return None
 
+        # Inspect model input tensor name and spatial dimensions
+        input_name = "images"
+        calib_h, calib_w = 416, 416
+        try:
+            import onnx
+
+            model_proto = onnx.load(str(clean_onnx))
+            if model_proto.graph.input:
+                first_input = model_proto.graph.input[0]
+                input_name = first_input.name
+                dims = [d.dim_value for d in first_input.type.tensor_type.shape.dim]
+                if len(dims) == 4 and dims[2] > 0 and dims[3] > 0:
+                    calib_h, calib_w = dims[2], dims[3]
+        except Exception:
+            pass
+
         # Generate sample calibration dataset
-        calib_path = work_dir / "calibration.npy"
+        calib_path = work_dir / f"calibration_{calib_h}x{calib_w}.npy"
         if not calib_path.exists():
             try:
                 import numpy as np
 
-                calib_data = np.random.uniform(0.0, 1.0, size=(10, 416, 416, 3)).astype(np.float32)
+                calib_data = np.random.uniform(0.0, 1.0, size=(10, calib_h, calib_w, 3)).astype(np.float32)
                 np.save(str(calib_path), calib_data)
             except Exception as e:
                 print(f"[ERROR] Failed to generate calibration data: {e}")
@@ -150,7 +166,7 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
                 "--tflite_backend",
                 "tf_converter",
                 "-cind",
-                "images",
+                input_name,
                 str(calib_path),
                 "[[[[0.0,0.0,0.0]]]]",
                 "[[[[1.0,1.0,1.0]]]]",

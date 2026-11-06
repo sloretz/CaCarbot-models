@@ -2,7 +2,6 @@
 
 This document describes the compilation pipeline that transforms open vision models into hardware-accelerated binaries for the CaCarbot.
 
----
 
 ## The Hardware Target: Synaptics Astra SL2610 NPU
 
@@ -12,7 +11,6 @@ The NPU operates under two specific requirements:
 1. **8-bit Integer Arithmetic (INT8)**: The NPU processes 8-bit integers rather than 32-bit floating-point numbers.
 2. **Virtual Machine FlatBuffer (.vmfb)**: The NPU runtime (`torq-run-module`) loads pre-compiled `.vmfb` program binaries directly through the `/dev/torq` driver.
 
----
 
 ## The Conversion Pipeline
 
@@ -37,7 +35,6 @@ Upstream ONNX Model (FP32)
 Coralboard SL .vmfb Binary
 ```
 
----
 
 ## Step 1: Graph Optimization (Focus Layer)
 
@@ -51,7 +48,6 @@ This tool solves that problem before compilation:
 * It inserts a single `Reshape` and `Transpose` sequence that performs the exact same mathematical rearrangement.
 * The output matches the original model output with zero numerical difference.
 
----
 
 ## Step 2: Full INT8 Quantization
 
@@ -63,7 +59,6 @@ This tool:
 3. Generates scale and zero-point parameters.
 4. Produces a fully integer-quantized model via `onnx2tf`.
 
----
 
 ## Step 3: TOSA MLIR Conversion
 
@@ -71,7 +66,6 @@ The Synaptics Torq compiler accepts input programs in the TOSA (Tensor Operator 
 
 This tool runs `tosa-converter-for-tflite` to translate the quantized model into clean, static TOSA operations.
 
----
 
 ## Step 4: Torq Hardware Compilation
 
@@ -85,7 +79,6 @@ torq-compile model.tosa.mlir -o model.vmfb --torq-hw=SL2610
 * Execution schedules for the Torq compute engine.
 * A finalized `.vmfb` binary file ready for deployment.
 
----
 
 ## Step 5: Deployment to the CaCarbot
 
