@@ -67,10 +67,11 @@ The tool stores your models in the `models/` directory.
 
 ## Compiling to `.vmfb`
 
-The tool downloads models as `.onnx` files. The Synaptics `torq-compile` utility converts `.onnx` files into `.vmfb` binaries for the Coralboard SL NPU.
+The tool optimizes, quantizes, and compiles models into `.vmfb` binaries for the Coralboard SL NPU.
 
-- When you pass `--extra compile` on a compatible Linux x86_64 host, `uv` installs `torq-compiler` and the tool compiles the models automatically.
-- If your system lacks `torq-compile` or runs another architecture, the tool saves the downloaded files and displays instructions for manual installation.
+- When you pass `--extra compile` on a compatible Linux x86_64 host, `uv` installs the compilation tools and builds the models.
+- If your system lacks compiler support or runs another architecture, the tool saves the downloaded models and provides instructions.
+- To read the full technical explanation of the conversion pipeline, see [docs/model_pipeline.md](docs/model_pipeline.md).
 
 ---
 

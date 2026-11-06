@@ -7,15 +7,21 @@ license = { file = "LICENSE" }
 authors = [
     { name = "Shane Loretz", email = "shane.loretz@gmail.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.12, <3.13"
 dependencies = [
-    "requests>=2.34.2",
-    "tqdm>=4.70.1",
+    "requests>=2.31.0",
+    "tqdm>=4.66.0",
 ]
 
 [project.optional-dependencies]
 compile = [
     "torq-compiler>=2.2.0",
+    "tosa-converter-for-tflite>=2026.2.0",
+    "onnx2tf[tensorflow]>=2.6.8",
+    "tf-keras>=2.18.0",
+    "tensorflow-cpu>=2.18.0",
+    "onnx>=1.16.0",
+    "numpy>=1.26.0",
 ]
 
 [project.scripts]
