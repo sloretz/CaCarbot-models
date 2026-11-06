@@ -64,7 +64,7 @@ The NPU executes math faster and uses less memory when working with 8-bit intege
 
 This tool:
 1. Downloads representative images from the Coco128 dataset.
-2. Preprocesses the images according to model specifications (RGB in [0, 1] for RTMDet, BGR in [0, 255] for YOLOX).
+2. Preprocesses the images with aspect-ratio-preserving letterbox padding according to model specifications (standardized BGR with ImageNet mean/std for RTMDet, raw BGR in [0, 255] for YOLOX).
 3. Feeds these real calibration images through the model.
 4. Measures the minimum and maximum signal values across every layer.
 5. Generates scale and zero-point parameters.

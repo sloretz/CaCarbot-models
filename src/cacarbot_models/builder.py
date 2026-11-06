@@ -212,7 +212,7 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
             pass
 
         # Generate representative calibration dataset
-        calib_path = work_dir / f"calibration_{model_info.architecture.lower()}_{calib_h}x{calib_w}.npy"
+        calib_path = work_dir / f"calibration_v2_{model_info.architecture.lower()}_{calib_h}x{calib_w}.npy"
         if not calib_path.exists():
             print(f"Preparing real calibration dataset for {model_info.name}...")
             try:
@@ -224,16 +224,30 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
                 samples = []
                 for img_p in calib_images:
                     with Image.open(img_p) as im:
-                        im_resized = im.convert("RGB").resize((calib_w, calib_h), Image.Resampling.BILINEAR)
-                        arr = np.array(im_resized, dtype=np.float32)
+                        w, h = im.size
+                        scale = min(calib_w / w, calib_h / h)
+                        nw, nh = int(round(w * scale)), int(round(h * scale))
+                        im_resized = im.convert("RGB").resize((nw, nh), Image.Resampling.BILINEAR)
+
+                        # Create gray 114 canvas for letterbox padding
+                        canvas = Image.new("RGB", (calib_w, calib_h), (114, 114, 114))
+                        pad_x = (calib_w - nw) // 2
+                        pad_y = (calib_h - nh) // 2
+                        canvas.paste(im_resized, (pad_x, pad_y))
+
+                        arr = np.array(canvas, dtype=np.float32)
+                        arr_bgr = arr[:, :, ::-1].copy()
 
                         if model_info.architecture == "YOLOX":
                             # YOLOX expects BGR in range [0.0, 255.0]
-                            arr_bgr = arr[:, :, ::-1].copy()
                             samples.append(arr_bgr)
                         else:
-                            # RTMDet expects RGB in range [0.0, 1.0]
-                            samples.append(arr / 255.0)
+                            # RTMDet from MMDetection expects BGR with ImageNet normalization:
+                            # mean = [103.53, 116.28, 123.675], std = [57.375, 57.12, 58.395]
+                            mean = np.array([103.53, 116.28, 123.675], dtype=np.float32)
+                            std = np.array([57.375, 57.12, 58.395], dtype=np.float32)
+                            norm_bgr = (arr_bgr - mean) / std
+                            samples.append(norm_bgr)
 
                 calib_data = np.stack(samples, axis=0)
                 np.save(str(calib_path), calib_data)

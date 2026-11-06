@@ -1,6 +1,6 @@
 [project]
 name = "CaCarbot-models"
-version = "0.2.0"
+version = "0.2.1"
 description = "AI model downloader and builder for CaCarbot on Synaptics Coralboard SL"
 readme = "README.md"
 license = { file = "LICENSE" }
