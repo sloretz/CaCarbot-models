@@ -1,6 +1,6 @@
 [project]
 name = "CaCarbot-models"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI model downloader and builder for CaCarbot on Synaptics Coralboard SL"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -22,6 +22,7 @@ compile = [
     "tensorflow-cpu>=2.18.0",
     "onnx>=1.16.0",
     "numpy>=1.26.0",
+    "pillow>=10.0.0",
 ]
 
 [project.scripts]

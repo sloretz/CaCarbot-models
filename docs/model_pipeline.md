@@ -49,15 +49,13 @@ This tool solves that problem:
 * It inserts a single `Reshape` and `Transpose` sequence that performs the exact same mathematical rearrangement.
 * The output matches the original model output with zero numerical difference.
 
-### RTMDet Post-Processing Pruning
-Upstream RTMDet models bundle dynamic Non-Maximum Suppression (NMS), `TopK`, and conditional `Where` operations into the ONNX file. These dynamic operators crash quantization tools and cannot execute on the fixed-point NPU compute engine.
+### Head Decoupling and Graph Optimization
+Upstream models often bundle dynamic Non-Maximum Suppression (NMS), `TopK`, and conditional `Where` operations into the ONNX file, or concatenate bounding box coordinates and classification scores into a single output tensor. Combining coordinate magnitudes (in the hundreds) with probability scores (in the range [0, 1]) causes INT8 quantization to crush score precision to zero. Dynamic operators also crash quantization tools and cannot execute on the fixed-point NPU compute engine.
 
-This tool:
-* Locates the `NonMaxSuppression` operator.
-* Extracts the raw bounding box coordinates and classification probability scores from the detection head.
-* Removes all subsequent post-processing nodes.
-* Appends a static `Concat` operation that outputs the raw predictions directly.
-* Passes clean, static tensor math to the quantizer and compiler.
+This tool solves these issues:
+* **Focus Layer Repair (YOLOX)**: It replaces slicing sequences with a static `Reshape` and `Transpose` sequence that preserves identical mathematical rearrangement.
+* **Post-Processing Pruning (RTMDet)**: It extracts raw bounding box coordinates and classification scores, and removes dynamic NMS, `TopK`, and `Where` nodes.
+* **Output Head Decoupling (YOLOX and RTMDet)**: It separates predictions into two independent output tensors (`boxes` and `scores`). Independent quantization scales allow the compiler to calibrate coordinate values and score probabilities with full 8-bit precision.
 
 
 ## Step 2: Full INT8 Quantization
@@ -65,10 +63,12 @@ This tool:
 The NPU executes math faster and uses less memory when working with 8-bit integers.
 
 This tool:
-1. Feeds sample calibration images through the model.
-2. Measures the minimum and maximum signal values across every layer.
-3. Generates scale and zero-point parameters.
-4. Produces a fully integer-quantized model via `onnx2tf`.
+1. Downloads representative images from the Coco128 dataset.
+2. Preprocesses the images according to model specifications (RGB in [0, 1] for RTMDet, BGR in [0, 255] for YOLOX).
+3. Feeds these real calibration images through the model.
+4. Measures the minimum and maximum signal values across every layer.
+5. Generates scale and zero-point parameters.
+6. Produces a fully integer-quantized model via `onnx2tf`.
 
 
 ## Step 3: TOSA MLIR Conversion

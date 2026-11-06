@@ -21,7 +21,7 @@ def check_torq_compiler() -> Optional[str]:
 
 
 def patch_yolox_focus_layer(input_onnx: Path, output_onnx: Path) -> bool:
-    """Replace the slicing Focus layer with a static Reshape-Transpose-Reshape sequence."""
+    """Replace YOLOX slicing Focus layer and decouple box and score output heads."""
     try:
         import numpy as np
         import onnx
@@ -33,32 +33,48 @@ def patch_yolox_focus_layer(input_onnx: Path, output_onnx: Path) -> bool:
 
         # Check if first 8 nodes are Slice and 9th is Concat
         first_ops = [n.op_type for n in model.graph.node[:9]]
-        if first_ops != ["Slice"] * 8 + ["Concat"]:
-            # Model does not have the standard YOLOX slicing Focus layer
-            return False
+        if first_ops == ["Slice"] * 8 + ["Concat"]:
+            input_tensor = model.graph.input[0]
+            input_dims = [d.dim_value for d in input_tensor.type.tensor_type.shape.dim]
+            if len(input_dims) == 4 and input_dims[2] and input_dims[3]:
+                b, c, h, w = input_dims
+                h_half, w_half = h // 2, w // 2
+                concat_out = model.graph.node[8].output[0]
 
-        input_tensor = model.graph.input[0]
-        input_dims = [d.dim_value for d in input_tensor.type.tensor_type.shape.dim]
-        if len(input_dims) != 4 or not input_dims[2] or not input_dims[3]:
-            return False
+                shape1_init = helper.make_tensor("focus_shape1", TensorProto.INT64, [6], [b, c, h_half, 2, w_half, 2])
+                shape2_init = helper.make_tensor("focus_shape2", TensorProto.INT64, [4], [b, c * 4, h_half, w_half])
+                model.graph.initializer.extend([shape1_init, shape2_init])
 
-        b, c, h, w = input_dims
-        h_half, w_half = h // 2, w // 2
-        concat_out = model.graph.node[8].output[0]
+                node_r1 = helper.make_node("Reshape", [input_tensor.name, "focus_shape1"], ["focus_r1"], name="CleanFocus_R1")
+                node_trans = helper.make_node(
+                    "Transpose", ["focus_r1"], ["focus_trans"], perm=[0, 5, 3, 1, 2, 4], name="CleanFocus_Trans"
+                )
+                node_r2 = helper.make_node("Reshape", ["focus_trans", "focus_shape2"], [concat_out], name="CleanFocus_R2")
 
-        shape1_init = helper.make_tensor("focus_shape1", TensorProto.INT64, [6], [b, c, h_half, 2, w_half, 2])
-        shape2_init = helper.make_tensor("focus_shape2", TensorProto.INT64, [4], [b, c * 4, h_half, w_half])
-        model.graph.initializer.extend([shape1_init, shape2_init])
+                new_nodes = [node_r1, node_trans, node_r2] + list(model.graph.node[9:])
+                del model.graph.node[:]
+                model.graph.node.extend(new_nodes)
 
-        node_r1 = helper.make_node("Reshape", [input_tensor.name, "focus_shape1"], ["focus_r1"], name="CleanFocus_R1")
-        node_trans = helper.make_node(
-            "Transpose", ["focus_r1"], ["focus_trans"], perm=[0, 5, 3, 1, 2, 4], name="CleanFocus_Trans"
-        )
-        node_r2 = helper.make_node("Reshape", ["focus_trans", "focus_shape2"], [concat_out], name="CleanFocus_R2")
+        # Decouple raw output into separate boxes and scores heads for independent INT8 quantization
+        last_node = model.graph.node[-1]
+        raw_out = "raw_yolox_output"
+        last_node.output[0] = raw_out
 
-        new_nodes = [node_r1, node_trans, node_r2] + list(model.graph.node[9:])
-        del model.graph.node[:]
-        model.graph.node.extend(new_nodes)
+        axes_init = helper.make_tensor("slice_axes", TensorProto.INT64, [1], [2])
+        starts_box = helper.make_tensor("starts_box", TensorProto.INT64, [1], [0])
+        ends_box = helper.make_tensor("ends_box", TensorProto.INT64, [1], [4])
+        starts_sc = helper.make_tensor("starts_sc", TensorProto.INT64, [1], [4])
+        ends_sc = helper.make_tensor("ends_sc", TensorProto.INT64, [1], [85])
+        model.graph.initializer.extend([axes_init, starts_box, ends_box, starts_sc, ends_sc])
+
+        node_box = helper.make_node("Slice", [raw_out, "starts_box", "ends_box", "slice_axes"], ["boxes"], name="SliceBoxes")
+        node_sc = helper.make_node("Slice", [raw_out, "starts_sc", "ends_sc", "slice_axes"], ["scores"], name="SliceScores")
+        model.graph.node.extend([node_box, node_sc])
+
+        del model.graph.output[:]
+        out_b = helper.make_tensor_value_info("boxes", TensorProto.FLOAT, [None, 3549, 4])
+        out_s = helper.make_tensor_value_info("scores", TensorProto.FLOAT, [None, 3549, 81])
+        model.graph.output.extend([out_b, out_s])
 
         onnx.checker.check_model(model)
         output_onnx.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +86,7 @@ def patch_yolox_focus_layer(input_onnx: Path, output_onnx: Path) -> bool:
 
 
 def prune_rtmdet_postprocessing(input_onnx: Path, output_onnx: Path) -> bool:
-    """Prune dynamic NMS and post-processing layers from RTMDet and expose raw detection heads."""
+    """Prune dynamic NMS and post-processing layers from RTMDet and decouple box and score heads."""
     try:
         import onnx
         from onnx import helper, TensorProto
@@ -107,22 +123,12 @@ def prune_rtmdet_postprocessing(input_onnx: Path, output_onnx: Path) -> bool:
             return False
 
         # Keep nodes up to the bounding box concat node
-        new_nodes = list(model.graph.node[: bbox_concat_idx + 1])
-        concat_node = helper.make_node(
-            "Concat",
-            inputs=[bbox_tensor, scores_tensor],
-            outputs=["output"],
-            axis=2,
-            name="RawDetections",
-        )
-        new_nodes.append(concat_node)
+        del model.graph.node[bbox_concat_idx + 1:]
 
-        del model.graph.node[:]
-        model.graph.node.extend(new_nodes)
-
-        out_tensor = helper.make_tensor_value_info("output", TensorProto.FLOAT, [None, None, None])
         del model.graph.output[:]
-        model.graph.output.append(out_tensor)
+        out_boxes = helper.make_tensor_value_info(bbox_tensor, TensorProto.FLOAT, [None, None, 4])
+        out_scores = helper.make_tensor_value_info(scores_tensor, TensorProto.FLOAT, [None, None, None])
+        model.graph.output.extend([out_boxes, out_scores])
 
         onnx.checker.check_model(model)
         output_onnx.parent.mkdir(parents=True, exist_ok=True)
@@ -174,10 +180,12 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
         clean_onnx = work_dir / f"{model_info.name}_clean.onnx"
         if not clean_onnx.exists():
             print(f"Optimizing ONNX graph for {model_info.name}...")
-            if patch_yolox_focus_layer(input_path, clean_onnx):
-                pass
-            elif prune_rtmdet_postprocessing(input_path, clean_onnx):
-                pass
+            if model_info.architecture == "YOLOX":
+                if not patch_yolox_focus_layer(input_path, clean_onnx):
+                    shutil.copyfile(input_path, clean_onnx)
+            elif model_info.architecture == "RTMDet":
+                if not prune_rtmdet_postprocessing(input_path, clean_onnx):
+                    shutil.copyfile(input_path, clean_onnx)
             else:
                 shutil.copyfile(input_path, clean_onnx)
 
@@ -203,14 +211,33 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
         except Exception:
             pass
 
-        # Generate sample calibration dataset
-        calib_path = work_dir / f"calibration_{calib_h}x{calib_w}.npy"
+        # Generate representative calibration dataset
+        calib_path = work_dir / f"calibration_{model_info.architecture.lower()}_{calib_h}x{calib_w}.npy"
         if not calib_path.exists():
+            print(f"Preparing real calibration dataset for {model_info.name}...")
             try:
                 import numpy as np
+                from PIL import Image
+                from .downloader import download_calibration_images
 
-                calib_data = np.random.uniform(0.0, 1.0, size=(10, calib_h, calib_w, 3)).astype(np.float32)
+                calib_images = download_calibration_images(output_dir.parent / "downloads", max_images=32)
+                samples = []
+                for img_p in calib_images:
+                    with Image.open(img_p) as im:
+                        im_resized = im.convert("RGB").resize((calib_w, calib_h), Image.Resampling.BILINEAR)
+                        arr = np.array(im_resized, dtype=np.float32)
+
+                        if model_info.architecture == "YOLOX":
+                            # YOLOX expects BGR in range [0.0, 255.0]
+                            arr_bgr = arr[:, :, ::-1].copy()
+                            samples.append(arr_bgr)
+                        else:
+                            # RTMDet expects RGB in range [0.0, 1.0]
+                            samples.append(arr / 255.0)
+
+                calib_data = np.stack(samples, axis=0)
                 np.save(str(calib_path), calib_data)
+                print(f"[OK] Saved {len(samples)} calibration frames ({calib_w}x{calib_h}) to {calib_path.name}")
             except Exception as e:
                 print(f"[ERROR] Failed to generate calibration data: {e}")
                 return None

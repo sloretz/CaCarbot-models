@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 import requests
 from tqdm import tqdm
 
@@ -52,3 +52,27 @@ def download_model(model_info: ModelInfo, output_dir: Path) -> Path:
     """Download a specific model to the target output directory."""
     target_path = output_dir / model_info.filename
     return download_file(model_info.download_url, target_path)
+
+
+def download_calibration_images(cache_dir: Path, max_images: int = 32) -> List[Path]:
+    """Download representative images for INT8 quantization calibration."""
+    calib_dir = cache_dir / "calibration_images"
+    calib_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = sorted(calib_dir.glob("*.jpg"))
+    if len(existing) >= max_images:
+        return existing[:max_images]
+
+    calib_zip = cache_dir / "coco128.zip"
+    if not calib_zip.exists():
+        download_file("https://github.com/ultralytics/yolov5/releases/download/v1.0/coco128.zip", calib_zip)
+
+    import zipfile
+    with zipfile.ZipFile(calib_zip, "r") as z:
+        jpg_entries = [f for f in z.namelist() if f.endswith(".jpg")][:max_images]
+        for entry in jpg_entries:
+            target_file = calib_dir / Path(entry).name
+            if not target_file.exists():
+                target_file.write_bytes(z.read(entry))
+
+    return sorted(calib_dir.glob("*.jpg"))[:max_images]
