@@ -69,6 +69,70 @@ def patch_yolox_focus_layer(input_onnx: Path, output_onnx: Path) -> bool:
         return False
 
 
+def prune_rtmdet_postprocessing(input_onnx: Path, output_onnx: Path) -> bool:
+    """Prune dynamic NMS and post-processing layers from RTMDet and expose raw detection heads."""
+    try:
+        import onnx
+        from onnx import helper, TensorProto
+
+        model = onnx.load(str(input_onnx))
+        nms_idx = None
+        for i, n in enumerate(model.graph.node):
+            if n.op_type == "NonMaxSuppression":
+                nms_idx = i
+                break
+        if nms_idx is None:
+            return False
+
+        # Find the 4-input coordinate Concat node before NMS (assembles bounding boxes)
+        bbox_concat_idx = None
+        for i in range(nms_idx - 1, -1, -1):
+            n = model.graph.node[i]
+            if n.op_type == "Concat" and len(n.input) == 4:
+                bbox_concat_idx = i
+                break
+        if bbox_concat_idx is None:
+            return False
+
+        bbox_tensor = model.graph.node[bbox_concat_idx].output[0]
+
+        # Find the last Sigmoid node before NMS (computes class scores)
+        scores_tensor = None
+        for i in range(nms_idx - 1, -1, -1):
+            n = model.graph.node[i]
+            if n.op_type == "Sigmoid":
+                scores_tensor = n.output[0]
+                break
+        if scores_tensor is None:
+            return False
+
+        # Keep nodes up to the bounding box concat node
+        new_nodes = list(model.graph.node[: bbox_concat_idx + 1])
+        concat_node = helper.make_node(
+            "Concat",
+            inputs=[bbox_tensor, scores_tensor],
+            outputs=["output"],
+            axis=2,
+            name="RawDetections",
+        )
+        new_nodes.append(concat_node)
+
+        del model.graph.node[:]
+        model.graph.node.extend(new_nodes)
+
+        out_tensor = helper.make_tensor_value_info("output", TensorProto.FLOAT, [None, None, None])
+        del model.graph.output[:]
+        model.graph.output.append(out_tensor)
+
+        onnx.checker.check_model(model)
+        output_onnx.parent.mkdir(parents=True, exist_ok=True)
+        onnx.save(model, str(output_onnx))
+        return True
+    except Exception as e:
+        print(f"[NOTE] Could not prune RTMDet post-processing in ONNX: {e}")
+        return False
+
+
 def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Optional[Path]:
     """Compile an ONNX, TFLite, or MLIR model into a Coralboard SL .vmfb binary."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -110,7 +174,11 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
         clean_onnx = work_dir / f"{model_info.name}_clean.onnx"
         if not clean_onnx.exists():
             print(f"Optimizing ONNX graph for {model_info.name}...")
-            if not patch_yolox_focus_layer(input_path, clean_onnx):
+            if patch_yolox_focus_layer(input_path, clean_onnx):
+                pass
+            elif prune_rtmdet_postprocessing(input_path, clean_onnx):
+                pass
+            else:
                 shutil.copyfile(input_path, clean_onnx)
 
         onnx2tf_tool = check_tool("onnx2tf")

@@ -4,8 +4,6 @@ This tool downloads and prepares AI models for the **CaCarbot** on the **Synapti
 
 This project uses the [Apache 2.0 License](LICENSE).
 
----
-
 ## What This Tool Does
 
 The Coralboard SL on the CaCarbot includes a dedicated Neural Processing Unit (NPU). The NPU accelerates computer vision and AI models without loading the main processor.
@@ -13,10 +11,8 @@ The Coralboard SL on the CaCarbot includes a dedicated Neural Processing Unit (N
 The NPU executes models in the **`.vmfb`** (Virtual Machine FlatBuffer) binary format.
 
 This tool:
-1. Downloads supported vision models (such as YOLOX).
+1. Downloads supported vision models (YOLOX and RTMDet).
 2. Compiles them into `.vmfb` format so you can run them on the board.
-
----
 
 ## Quick Start
 
@@ -52,16 +48,14 @@ uv run cacarbot-models
 
 The tool stores your models in the `models/` directory.
 
----
-
 ## Supported Models
 
 | Model Name | License | Input Resolution | Source |
 | :--- | :---: | :---: | :--- |
 | **`yolox-nano`** | [Apache 2.0](https://github.com/Megvii-BaseDetection/YOLOX/blob/main/LICENSE) | 416×416 | Official Megvii ONNX model |
 | **`yolox-tiny`** | [Apache 2.0](https://github.com/Megvii-BaseDetection/YOLOX/blob/main/LICENSE) | 416×416 | Official Megvii ONNX model |
-
----
+| **`rtmdet-nano`** | [Apache 2.0](https://github.com/open-mmlab/mmdetection/blob/main/LICENSE) | 320×320 | Pre-converted RTMDet ONNX model |
+| **`rtmdet-tiny`** | [Apache 2.0](https://github.com/open-mmlab/mmdetection/blob/main/LICENSE) | 640×640 | Pre-converted RTMDet ONNX model |
 
 ## Compiling to `.vmfb`
 
@@ -70,8 +64,6 @@ The tool optimizes, quantizes, and compiles models into `.vmfb` binaries for the
 - When you pass `--extra compile` on a compatible Linux x86_64 host, `uv` installs the compilation tools and builds the models.
 - If your system lacks compiler support or runs another architecture, the tool saves the downloaded models and provides instructions.
 - To read the full technical explanation of the conversion pipeline, see [docs/model_pipeline.md](docs/model_pipeline.md).
-
----
 
 ## Transferring Models to the Coralboard SL
 

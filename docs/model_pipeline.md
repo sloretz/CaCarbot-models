@@ -20,7 +20,7 @@ Standard models from open-source repositories arrive as 32-bit floating-point ON
 Upstream ONNX Model (FP32)
             │
             ▼
-[Step 1] Graph Optimization (Clean Focus Layer)
+[Step 1] Graph Optimization (YOLOX Focus & RTMDet Pruning)
             │
             ▼
 [Step 2] Full INT8 Quantization (onnx2tf)
@@ -36,17 +36,28 @@ Coralboard SL .vmfb Binary
 ```
 
 
-## Step 1: Graph Optimization (Focus Layer)
+## Step 1: Graph Optimization
 
-YOLOX uses a "Focus" layer at its input. This layer downsamples the image by taking alternating pixels and stacking them into channels.
+Standard ONNX exports frequently include operations that fail on fixed-point NPUs. This tool automatically repairs these patterns before compilation:
 
-Standard export scripts implement this operation with slicing steps. During conversion, standard tools translate those slicing steps into dynamic slices that exceed memory bounds on fixed-point NPUs.
+### YOLOX Focus Layer Repair
+YOLOX uses a "Focus" layer at its input. This layer downsamples the image by taking alternating pixels and stacking them into channels. Standard export scripts implement this operation with slicing steps. Standard conversion tools translate those slicing steps into dynamic slices that exceed memory bounds on fixed-point NPUs.
 
-This tool solves that problem before compilation:
+This tool solves that problem:
 * It reads the ONNX computation graph.
 * It removes the slice operations.
 * It inserts a single `Reshape` and `Transpose` sequence that performs the exact same mathematical rearrangement.
 * The output matches the original model output with zero numerical difference.
+
+### RTMDet Post-Processing Pruning
+Upstream RTMDet models bundle dynamic Non-Maximum Suppression (NMS), `TopK`, and conditional `Where` operations into the ONNX file. These dynamic operators crash quantization tools and cannot execute on the fixed-point NPU compute engine.
+
+This tool:
+* Locates the `NonMaxSuppression` operator.
+* Extracts the raw bounding box coordinates and classification probability scores from the detection head.
+* Removes all subsequent post-processing nodes.
+* Appends a static `Concat` operation that outputs the raw predictions directly.
+* Passes clean, static tensor math to the quantizer and compiler.
 
 
 ## Step 2: Full INT8 Quantization
