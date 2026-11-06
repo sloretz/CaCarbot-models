@@ -1,0 +1,26 @@
+# Python virtual environments & package caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Downloaded model files & compiled artifacts
+models/
+*.vmfb
+*.onnx
+*.pth
+*.pt
+*.tflite
+*.tmp
+
+# Editor & System Files
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
