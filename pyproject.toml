@@ -7,7 +7,7 @@ license = { file = "LICENSE" }
 authors = [
     { name = "Shane Loretz", email = "shane.loretz@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "requests>=2.34.2",
     "tqdm>=4.70.1",
@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 compile = [
-    "torq-compiler>=2.2.0; python_version >= '3.12'",
+    "torq-compiler>=2.2.0",
 ]
 
 [project.scripts]

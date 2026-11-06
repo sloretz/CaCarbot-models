@@ -52,8 +52,8 @@ MODELS: Dict[str, ModelInfo] = {
         architecture="RTMDet",
         input_resolution="320x320",
         description="State-of-the-art real-time detector by OpenMMLab (approx 1M parameters).",
-        download_url="https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet_nano_8xb32-300e_coco/rtmdet_nano_8xb32-300e_coco_20220902_065804-ac02f923.pth",
-        filename="rtmdet_nano.pth",
+        download_url="https://huggingface.co/bukuroo/RTMDet-ONNX/resolve/main/rtmdet-n-person.onnx",
+        filename="rtmdet_nano.onnx",
         is_precompiled_vmfb=False,
     ),
     "rtmdet-tiny": ModelInfo(
@@ -64,8 +64,8 @@ MODELS: Dict[str, ModelInfo] = {
         architecture="RTMDet",
         input_resolution="640x640 (or 320x320)",
         description="High-accuracy real-time detector by OpenMMLab (approx 4.8M parameters).",
-        download_url="https://download.openmmlab.com/mmdetection/v3.0/rtmdet/rtmdet_tiny_8xb32-300e_coco/rtmdet_tiny_8xb32-300e_coco_20220902_112414-785e32ee.pth",
-        filename="rtmdet_tiny.pth",
+        download_url="https://huggingface.co/bukuroo/RTMDet-ONNX/resolve/main/rtmdet-tiny-coco.onnx",
+        filename="rtmdet_tiny.onnx",
         is_precompiled_vmfb=False,
     ),
 }

@@ -26,6 +26,7 @@ jobs:
         with:
           enable-cache: true
           version: "latest"
+          python-version: "3.12"
 
       - name: Determine tag and release type
         id: release_info
@@ -59,7 +60,7 @@ jobs:
 
       - name: Build all models with Torq
         if: steps.release_info.outputs.exists == 'false'
-        run: uv run --extra compile cacarbot-models
+        run: uv run --python 3.12 --extra compile cacarbot-models
 
       - name: Publish GitHub Release
         if: steps.release_info.outputs.exists == 'false'
