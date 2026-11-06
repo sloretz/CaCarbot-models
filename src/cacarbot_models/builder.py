@@ -45,6 +45,10 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
         print("=" * 70 + "\n")
         return None
 
+    if input_path.suffix.lower() not in [".onnx", ".tosa", ".mlir"]:
+        print(f"[NOTE] {model_info.name} is in '{input_path.suffix}' format. torq-compile requires an ONNX file.")
+        return None
+
     print(f"Compiling {model_info.name} using torq-compile for SL2610 NPU...")
     cmd = [
         compiler,

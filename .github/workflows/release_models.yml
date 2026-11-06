@@ -1,0 +1,84 @@
+name: Build and Release Models
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      prerelease_suffix:
+        description: 'Pre-release label (e.g., rc, beta, dev)'
+        required: false
+        default: 'rc'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Determine tag and release type
+        id: release_info
+        run: |
+          VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SUFFIX="${{ github.event.inputs.prerelease_suffix || 'rc' }}"
+            TAG="v${VERSION}-${SUFFIX}.${{ github.run_number }}"
+            IS_PRERELEASE="true"
+            RELEASE_TITLE="Pre-release $TAG"
+          else
+            TAG="v${VERSION}"
+            IS_PRERELEASE="false"
+            RELEASE_TITLE="Release $TAG"
+          fi
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Skipping build."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Release $TAG does not exist. Proceeding with build."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build all models with Torq
+        if: steps.release_info.outputs.exists == 'false'
+        run: uv run --extra compile cacarbot-models
+
+      - name: Publish GitHub Release
+        if: steps.release_info.outputs.exists == 'false'
+        run: |
+          EXTRA_FLAGS=""
+          if [ "${{ steps.release_info.outputs.is_prerelease }}" = "true" ]; then
+            EXTRA_FLAGS="--prerelease"
+          fi
+
+          shopt -s nullglob
+          VMFB_FILES=(models/compiled/*.vmfb)
+          if [ ${#VMFB_FILES[@]} -eq 0 ]; then
+            echo "No .vmfb files found in models/compiled/. Nothing to release."
+            exit 1
+          fi
+
+          gh release create "${{ steps.release_info.outputs.tag }}" "${VMFB_FILES[@]}" \
+            --title "${{ steps.release_info.outputs.title }}" \
+            --notes "Compiled .vmfb models for Synaptics Coralboard SL (Torq NPU)." \
+            $EXTRA_FLAGS
+        env:
+          GH_TOKEN: ${{ github.token }}
