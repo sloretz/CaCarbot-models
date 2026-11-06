@@ -13,7 +13,7 @@ The Coralboard SL on the CaCarbot includes a dedicated Neural Processing Unit (N
 The NPU executes models in the **`.vmfb`** (Virtual Machine FlatBuffer) binary format.
 
 This tool:
-1. Downloads supported vision models (YOLOX and RTMDet).
+1. Downloads supported vision models (such as YOLOX).
 2. Compiles them into `.vmfb` format so you can run them on the board.
 
 ---
@@ -60,8 +60,6 @@ The tool stores your models in the `models/` directory.
 | :--- | :---: | :---: | :--- |
 | **`yolox-nano`** | [Apache 2.0](https://github.com/Megvii-BaseDetection/YOLOX/blob/main/LICENSE) | 416×416 | Official Megvii ONNX model |
 | **`yolox-tiny`** | [Apache 2.0](https://github.com/Megvii-BaseDetection/YOLOX/blob/main/LICENSE) | 416×416 | Official Megvii ONNX model |
-| **`rtmdet-nano`** | [Apache 2.0](https://github.com/open-mmlab/mmdetection/blob/main/LICENSE) | 320×320 | Pre-converted RTMDet ONNX model |
-| **`rtmdet-tiny`** | [Apache 2.0](https://github.com/open-mmlab/mmdetection/blob/main/LICENSE) | 640×640 | Pre-converted RTMDet ONNX model |
 
 ---
 

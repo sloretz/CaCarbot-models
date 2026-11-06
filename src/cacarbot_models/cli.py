@@ -70,13 +70,17 @@ def run_pipeline(model_names, output_dir: Path, download_only: bool = False):
     print("\n" + "=" * 75)
     print("Summary of Models:")
     print("=" * 75)
+    all_success = True
     for name, status, path in results:
         print(f"- {name:20} : {status}")
         print(f"  File: {path}")
+        if not download_only and "Ready (.vmfb)" not in status:
+            all_success = False
     print("=" * 75)
     print("\nNext steps to run on your Coralboard SL:")
     print("  adb push <model_file.vmfb> /home/root/")
     print()
+    return all_success
 
 
 def main():
@@ -88,7 +92,7 @@ def main():
         "model",
         nargs="?",
         default="all",
-        help="Model to download and build (e.g. 'yolox-nano', 'rtmdet-nano', 'all'). Default: 'all'",
+        help="Model to download and build (e.g. 'yolox-nano', 'yolox-tiny', 'all'). Default: 'all'",
     )
     parser.add_argument(
         "--output-dir",
@@ -120,7 +124,9 @@ def main():
     else:
         selected_models = [args.model]
 
-    run_pipeline(selected_models, args.output_dir, args.download_only)
+    success = run_pipeline(selected_models, args.output_dir, args.download_only)
+    if not success:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

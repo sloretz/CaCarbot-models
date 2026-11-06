@@ -10,6 +10,10 @@ on:
         required: false
         default: 'rc'
 
+concurrency:
+  group: release_models
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -22,11 +26,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           version: "latest"
-          python-version: "3.12"
 
       - name: Determine tag and release type
         id: release_info
@@ -65,6 +68,14 @@ jobs:
       - name: Publish GitHub Release
         if: steps.release_info.outputs.exists == 'false'
         run: |
+          uv run python -c "
+          from cacarbot_models.models import MODELS
+          from pathlib import Path
+          missing = [m for m in MODELS if not (Path('models/compiled') / f'{m}.vmfb').exists()]
+          if missing:
+              raise SystemExit(f'Cannot publish release: missing compiled models {missing}')
+          "
+
           EXTRA_FLAGS=""
           if [ "${{ steps.release_info.outputs.is_prerelease }}" = "true" ]; then
             EXTRA_FLAGS="--prerelease"
