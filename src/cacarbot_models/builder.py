@@ -20,38 +20,6 @@ def check_torq_compiler() -> Optional[str]:
     return check_tool("torq-compile")
 
 
-def prepare_yolov6_heads(input_onnx: Path, output_onnx: Path) -> bool:
-    """Decouple YOLOv6 output into separate boxes and scores heads for independent INT8 quantization."""
-    try:
-        import onnx
-        from onnx import helper, TensorProto
-
-        model = onnx.load(str(input_onnx))
-        if not model.graph.node:
-            return False
-
-        last_node = model.graph.node[-1]
-        # In YOLOv6 export, last node is Concat combining boxes, objectness, and class scores
-        if last_node.op_type == "Concat" and len(last_node.input) >= 3:
-            box_tensor = last_node.input[0]
-            scores_tensor = last_node.input[2]
-            model.graph.node.remove(last_node)
-
-            del model.graph.output[:]
-            out_b = helper.make_tensor_value_info(box_tensor, TensorProto.FLOAT, [None, 8400, 4])
-            out_s = helper.make_tensor_value_info(scores_tensor, TensorProto.FLOAT, [None, 8400, 80])
-            model.graph.output.extend([out_b, out_s])
-
-            onnx.checker.check_model(model)
-            output_onnx.parent.mkdir(parents=True, exist_ok=True)
-            onnx.save(model, str(output_onnx))
-            return True
-        return False
-    except Exception as e:
-        print(f"[NOTE] Could not decouple YOLOv6 heads in ONNX: {e}")
-        return False
-
-
 def prune_ppyoloe_postprocessing(input_onnx: Path, output_onnx: Path) -> bool:
     """Prune dynamic NMS and post-processing layers from PP-YOLOE+ and expose static box/score heads."""
     try:
@@ -138,10 +106,7 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
         clean_onnx = work_dir / f"{model_info.name}_clean.onnx"
         if not clean_onnx.exists():
             print(f"Optimizing ONNX graph for {model_info.name}...")
-            if model_info.architecture == "YOLOv6":
-                if not prepare_yolov6_heads(input_path, clean_onnx):
-                    shutil.copyfile(input_path, clean_onnx)
-            elif model_info.architecture == "PPYOLOE":
+            if model_info.architecture == "PPYOLOE":
                 if not prune_ppyoloe_postprocessing(input_path, clean_onnx):
                     shutil.copyfile(input_path, clean_onnx)
             else:
@@ -195,11 +160,7 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
 
                         arr_rgb = np.array(canvas, dtype=np.float32)
 
-                        if model_info.architecture == "YOLOv6":
-                            # YOLOv6 expects RGB normalized to [0.0, 1.0] or [0.0, 255.0]
-                            # Using [0.0, 1.0] matches standard YOLOv6 training
-                            samples.append(arr_rgb / 255.0)
-                        elif model_info.architecture == "PPYOLOE":
+                        if model_info.architecture == "PPYOLOE":
                             # PP-YOLOE expects RGB with ImageNet normalization on [0.0, 1.0] scale
                             norm_rgb = arr_rgb / 255.0
                             mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -221,7 +182,9 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
         if not tflite_file.exists():
             print(f"Quantizing {model_info.name} to INT8 using onnx2tf...")
             cmd_onnx2tf = [
-                onnx2tf_tool,
+                sys.executable,
+                "-m",
+                "onnx2tf",
                 "-i",
                 str(clean_onnx),
                 "-o",
@@ -247,16 +210,11 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
                     print(res_tf.stderr[-1000:])
                 return None
 
-        tosa_converter = check_tool("tosa-converter-for-tflite")
-        if not tosa_converter:
-            print("[ERROR] 'tosa-converter-for-tflite' is required to compile TFLite models.")
-            return None
-
         tosa_mlir = work_dir / f"{model_info.name}.tosa.mlir"
         if not tosa_mlir.exists():
             print(f"Converting INT8 TFLite to TOSA MLIR for {model_info.name}...")
             res_tosa = subprocess.run(
-                [tosa_converter, str(tflite_file), "--text", "-o", str(tosa_mlir)],
+                [sys.executable, "-m", "tosa_converter_for_tflite.cli", str(tflite_file), "--text", "-o", str(tosa_mlir)],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -269,16 +227,11 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
 
     # Step 2: Handle TFLite inputs directly
     elif input_path.suffix.lower() == ".tflite":
-        tosa_converter = check_tool("tosa-converter-for-tflite")
-        if not tosa_converter:
-            print("[ERROR] 'tosa-converter-for-tflite' is required to compile TFLite models.")
-            return None
-
         tosa_mlir = work_dir / f"{model_info.name}.tosa.mlir"
         if not tosa_mlir.exists():
             print(f"Converting TFLite to TOSA MLIR for {model_info.name}...")
             res_tosa = subprocess.run(
-                [tosa_converter, str(input_path), "--text", "-o", str(tosa_mlir)],
+                [sys.executable, "-m", "tosa_converter_for_tflite.cli", str(input_path), "--text", "-o", str(tosa_mlir)],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -308,6 +261,24 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
 
     try:
         result = subprocess.run(cmd_compile, capture_output=True, text=True, check=False)
+        if result.returncode != 0 and ("GLIBC" in result.stderr or "cannot execute" in result.stderr or result.returncode == 127):
+            if shutil.which("podman"):
+                print("Host glibc mismatch detected. Falling back to containerized torq-compile via podman...")
+                venv_dir = str(Path(compiler).resolve().parents[3])
+                elf_path = "/venv/lib/python3.12/site-packages/torq/_compiler_libs/torq-compile"
+                container_cmd = [
+                    "podman", "run", "--rm",
+                    "-v", "/home/sloretz/projects/twinreef_prototype:/home/sloretz/projects/twinreef_prototype",
+                    "-w", str(work_dir.resolve()),
+                    "-v", f"{venv_dir}:/venv:ro",
+                    "localhost/torq-compiler:noble",
+                    elf_path,
+                    str(tosa_mlir.resolve()),
+                    "-o", str(target_vmfb.resolve()),
+                    "--torq-hw=SL2610",
+                ]
+                result = subprocess.run(container_cmd, capture_output=True, text=True, check=False)
+
         if result.returncode == 0 and target_vmfb.exists() and target_vmfb.stat().st_size > 0:
             print(f"[OK] Successfully compiled {model_info.name} -> {target_vmfb}")
             return target_vmfb

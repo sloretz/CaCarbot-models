@@ -11,7 +11,7 @@ The Coralboard SL on the CaCarbot includes a dedicated Neural Processing Unit (N
 The NPU executes models in the **`.vmfb`** (Virtual Machine FlatBuffer) binary format.
 
 This tool:
-1. Downloads permissively licensed (Apache 2.0) vision models (**YOLOv6 3.0** and **PP-YOLOE+**).
+1. Downloads permissively licensed (Apache 2.0) vision models (**Baidu PP-YOLOE+**).
 2. Quantizes them to INT8 using representative COCO calibration data and compiles them into `.vmfb` format so you can run them on the board.
 
 ## Quick Start
@@ -36,9 +36,9 @@ To include `torq-compiler` automatically on supported systems, add `--extra comp
 uv run --extra compile cacarbot-models
 ```
 
-Or target a specific model (such as **YOLOv6-Nano**):
+Or target a specific model (such as **PP-YOLOE+-Small**):
 ```bash
-uv run --extra compile cacarbot-models yolov6-nano
+uv run --extra compile cacarbot-models ppyoloe-plus-s
 ```
 
 If your platform does not support the compiler wheel or you only want to download model files, omit the extra:
@@ -52,8 +52,6 @@ The tool stores your models in the `models/` directory.
 
 | Model Name | License | Input Resolution | Source | Description |
 | :--- | :---: | :---: | :--- | :--- |
-| **`yolov6-nano`** | [Apache 2.0](https://github.com/meituan/YOLOv6/blob/main/LICENSE) | 640×640 | Meituan YOLOv6 3.0 | Ultra-fast detector with RepVGG 3x3 Conv backbone and linear DFL regression (~4.7M params). |
-| **`yolov6-small`** | [Apache 2.0](https://github.com/meituan/YOLOv6/blob/main/LICENSE) | 640×640 | Meituan YOLOv6 3.0 | High-accuracy real-time detector with reparameterized blocks (~18.5M params). |
 | **`ppyoloe-plus-s`** | [Apache 2.0](https://github.com/PaddlePaddle/PaddleDetection/blob/release/2.9/LICENSE) | 640×640 | Baidu PaddleDetection | Anchor-free detector with CSPRepResNet backbone and Task Alignment Learning head (~7.9M params). |
 
 ## Compiling to `.vmfb`
@@ -70,10 +68,10 @@ After generating a `.vmfb` file in `models/compiled/`, transfer it to your Coral
 
 ```bash
 # Push the model to the root user directory on the board
-adb push models/compiled/yolox-nano.vmfb /home/root/
+adb push models/compiled/ppyoloe_plus_s.vmfb /home/root/
 
 # Verify the file on the board
-adb shell "ls -lh /home/root/*.vmfb"
+adb shell "ls -lh /home/root/ppyoloe_plus_s.vmfb"
 ```
 
 You can now run hardware-accelerated inference on the board.
