@@ -20,10 +20,10 @@ Standard models from open-source repositories arrive as 32-bit floating-point ON
 Upstream ONNX Model (FP32)
             │
             ▼
-[Step 1] Graph Optimization (YOLOX Focus & RTMDet Pruning)
+[Step 1] Graph Optimization (YOLOv6 Head Decoupling & PP-YOLOE+ Pruning)
             │
             ▼
-[Step 2] Full INT8 Quantization (onnx2tf)
+[Step 2] Full INT8 Quantization (onnx2tf with COCO500 Calibration)
             │
             ▼
 [Step 3] TOSA MLIR Conversion (tosa-converter-for-tflite)
@@ -38,24 +38,13 @@ Coralboard SL .vmfb Binary
 
 ## Step 1: Graph Optimization
 
-Standard ONNX exports frequently include operations that fail on fixed-point NPUs. This tool automatically repairs these patterns before compilation:
+Standard ONNX exports frequently include operations that fail on fixed-point NPUs or degrade quantization precision. This tool automatically repairs these patterns before compilation:
 
-### YOLOX Focus Layer Repair
-YOLOX uses a "Focus" layer at its input. This layer downsamples the image by taking alternating pixels and stacking them into channels. Standard export scripts implement this operation with slicing steps. Standard conversion tools translate those slicing steps into dynamic slices that exceed memory bounds on fixed-point NPUs.
+### YOLOv6 Head Decoupling
+In standard YOLOv6 ONNX exports, bounding box coordinates, objectness logits, and class probabilities are concatenated into a single output tensor `[1, 8400, 85]`. Forcing bounding box pixel coordinates (hundreds of pixels) and class scores (0.0 to 1.0) into the same INT8 quantization range causes severe rounding errors. This tool decouples the graph into two independent output tensors (`boxes` and `scores`), allowing the compiler to calibrate coordinate scales and class probabilities independently.
 
-This tool solves that problem:
-* It reads the ONNX computation graph.
-* It removes the slice operations.
-* It inserts a single `Reshape` and `Transpose` sequence that performs the exact same mathematical rearrangement.
-* The output matches the original model output with zero numerical difference.
-
-### Head Decoupling and Graph Optimization
-Upstream models often bundle dynamic Non-Maximum Suppression (NMS), `TopK`, and conditional `Where` operations into the ONNX file, or concatenate bounding box coordinates and classification scores into a single output tensor. Combining coordinate magnitudes (in the hundreds) with probability scores (in the range [0, 1]) causes INT8 quantization to crush score precision to zero. Dynamic operators also crash quantization tools and cannot execute on the fixed-point NPU compute engine.
-
-This tool solves these issues:
-* **Focus Layer Repair (YOLOX)**: It replaces slicing sequences with a static `Reshape` and `Transpose` sequence that preserves identical mathematical rearrangement.
-* **Post-Processing Pruning (RTMDet)**: It extracts raw bounding box coordinates and classification scores, and removes dynamic NMS, `TopK`, and `Where` nodes.
-* **Output Head Decoupling (YOLOX and RTMDet)**: It separates predictions into two independent output tensors (`boxes` and `scores`). Independent quantization scales allow the compiler to calibrate coordinate values and score probabilities with full 8-bit precision.
+### PP-YOLOE+ Post-Processing Pruning
+PP-YOLOE+ ONNX graphs contain dynamic Non-Maximum Suppression (NMS), `Shape`, `Slice`, and `Gather` operators. Dynamic-dimension outputs cannot run on fixed-point NPU engines. This tool strips the dynamic post-processing nodes and extracts the raw static feature heads (`boxes` and `scores`), generating clean, fixed-size tensors.
 
 
 ## Step 2: Full INT8 Quantization
@@ -63,8 +52,8 @@ This tool solves these issues:
 The NPU executes math faster and uses less memory when working with 8-bit integers.
 
 This tool:
-1. Downloads representative images from the Coco128 dataset.
-2. Preprocesses the images with aspect-ratio-preserving letterbox padding according to model specifications (standardized BGR with ImageNet mean/std for RTMDet, raw BGR in [0, 255] for YOLOX).
+1. Downloads representative images from the curated 500-image COCO validation subset (covering all 80 classes).
+2. Preprocesses the images with aspect-ratio-preserving letterbox padding according to model specifications (RGB in [0, 1] for YOLOv6, ImageNet-normalized RGB for PP-YOLOE+).
 3. Feeds these real calibration images through the model.
 4. Measures the minimum and maximum signal values across every layer.
 5. Generates scale and zero-point parameters.

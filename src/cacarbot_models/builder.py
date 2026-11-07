@@ -20,73 +20,40 @@ def check_torq_compiler() -> Optional[str]:
     return check_tool("torq-compile")
 
 
-def patch_yolox_focus_layer(input_onnx: Path, output_onnx: Path) -> bool:
-    """Replace YOLOX slicing Focus layer and decouple box and score output heads."""
+def prepare_yolov6_heads(input_onnx: Path, output_onnx: Path) -> bool:
+    """Decouple YOLOv6 output into separate boxes and scores heads for independent INT8 quantization."""
     try:
-        import numpy as np
         import onnx
         from onnx import helper, TensorProto
 
         model = onnx.load(str(input_onnx))
-        if len(model.graph.node) < 9:
+        if not model.graph.node:
             return False
 
-        # Check if first 8 nodes are Slice and 9th is Concat
-        first_ops = [n.op_type for n in model.graph.node[:9]]
-        if first_ops == ["Slice"] * 8 + ["Concat"]:
-            input_tensor = model.graph.input[0]
-            input_dims = [d.dim_value for d in input_tensor.type.tensor_type.shape.dim]
-            if len(input_dims) == 4 and input_dims[2] and input_dims[3]:
-                b, c, h, w = input_dims
-                h_half, w_half = h // 2, w // 2
-                concat_out = model.graph.node[8].output[0]
-
-                shape1_init = helper.make_tensor("focus_shape1", TensorProto.INT64, [6], [b, c, h_half, 2, w_half, 2])
-                shape2_init = helper.make_tensor("focus_shape2", TensorProto.INT64, [4], [b, c * 4, h_half, w_half])
-                model.graph.initializer.extend([shape1_init, shape2_init])
-
-                node_r1 = helper.make_node("Reshape", [input_tensor.name, "focus_shape1"], ["focus_r1"], name="CleanFocus_R1")
-                node_trans = helper.make_node(
-                    "Transpose", ["focus_r1"], ["focus_trans"], perm=[0, 5, 3, 1, 2, 4], name="CleanFocus_Trans"
-                )
-                node_r2 = helper.make_node("Reshape", ["focus_trans", "focus_shape2"], [concat_out], name="CleanFocus_R2")
-
-                new_nodes = [node_r1, node_trans, node_r2] + list(model.graph.node[9:])
-                del model.graph.node[:]
-                model.graph.node.extend(new_nodes)
-
-        # Decouple raw output into separate boxes and scores heads for independent INT8 quantization
         last_node = model.graph.node[-1]
-        raw_out = "raw_yolox_output"
-        last_node.output[0] = raw_out
+        # In YOLOv6 export, last node is Concat combining boxes, objectness, and class scores
+        if last_node.op_type == "Concat" and len(last_node.input) >= 3:
+            box_tensor = last_node.input[0]
+            scores_tensor = last_node.input[2]
+            model.graph.node.remove(last_node)
 
-        axes_init = helper.make_tensor("slice_axes", TensorProto.INT64, [1], [2])
-        starts_box = helper.make_tensor("starts_box", TensorProto.INT64, [1], [0])
-        ends_box = helper.make_tensor("ends_box", TensorProto.INT64, [1], [4])
-        starts_sc = helper.make_tensor("starts_sc", TensorProto.INT64, [1], [4])
-        ends_sc = helper.make_tensor("ends_sc", TensorProto.INT64, [1], [85])
-        model.graph.initializer.extend([axes_init, starts_box, ends_box, starts_sc, ends_sc])
+            del model.graph.output[:]
+            out_b = helper.make_tensor_value_info(box_tensor, TensorProto.FLOAT, [None, 8400, 4])
+            out_s = helper.make_tensor_value_info(scores_tensor, TensorProto.FLOAT, [None, 8400, 80])
+            model.graph.output.extend([out_b, out_s])
 
-        node_box = helper.make_node("Slice", [raw_out, "starts_box", "ends_box", "slice_axes"], ["boxes"], name="SliceBoxes")
-        node_sc = helper.make_node("Slice", [raw_out, "starts_sc", "ends_sc", "slice_axes"], ["scores"], name="SliceScores")
-        model.graph.node.extend([node_box, node_sc])
-
-        del model.graph.output[:]
-        out_b = helper.make_tensor_value_info("boxes", TensorProto.FLOAT, [None, 3549, 4])
-        out_s = helper.make_tensor_value_info("scores", TensorProto.FLOAT, [None, 3549, 81])
-        model.graph.output.extend([out_b, out_s])
-
-        onnx.checker.check_model(model)
-        output_onnx.parent.mkdir(parents=True, exist_ok=True)
-        onnx.save(model, str(output_onnx))
-        return True
+            onnx.checker.check_model(model)
+            output_onnx.parent.mkdir(parents=True, exist_ok=True)
+            onnx.save(model, str(output_onnx))
+            return True
+        return False
     except Exception as e:
-        print(f"[NOTE] Could not patch Focus layer in ONNX: {e}")
+        print(f"[NOTE] Could not decouple YOLOv6 heads in ONNX: {e}")
         return False
 
 
-def prune_rtmdet_postprocessing(input_onnx: Path, output_onnx: Path) -> bool:
-    """Prune dynamic NMS and post-processing layers from RTMDet and decouple box and score heads."""
+def prune_ppyoloe_postprocessing(input_onnx: Path, output_onnx: Path) -> bool:
+    """Prune dynamic NMS and post-processing layers from PP-YOLOE+ and expose static box/score heads."""
     try:
         import onnx
         from onnx import helper, TensorProto
@@ -100,34 +67,25 @@ def prune_rtmdet_postprocessing(input_onnx: Path, output_onnx: Path) -> bool:
         if nms_idx is None:
             return False
 
-        # Find the 4-input coordinate Concat node before NMS (assembles bounding boxes)
-        bbox_concat_idx = None
-        for i in range(nms_idx - 1, -1, -1):
-            n = model.graph.node[i]
-            if n.op_type == "Concat" and len(n.input) == 4:
-                bbox_concat_idx = i
-                break
-        if bbox_concat_idx is None:
-            return False
+        # Identify box generator and score generator inputs to NMS
+        nms_node = model.graph.node[nms_idx]
+        box_in = nms_node.input[0]
+        score_in = nms_node.input[1]
 
-        bbox_tensor = model.graph.node[bbox_concat_idx].output[0]
-
-        # Find the last Sigmoid node before NMS (computes class scores)
-        scores_tensor = None
-        for i in range(nms_idx - 1, -1, -1):
-            n = model.graph.node[i]
-            if n.op_type == "Sigmoid":
-                scores_tensor = n.output[0]
-                break
-        if scores_tensor is None:
-            return False
-
-        # Keep nodes up to the bounding box concat node
-        del model.graph.node[bbox_concat_idx + 1:]
+        # Prune everything starting from NMS
+        del model.graph.node[nms_idx:]
 
         del model.graph.output[:]
-        out_boxes = helper.make_tensor_value_info(bbox_tensor, TensorProto.FLOAT, [None, None, 4])
-        out_scores = helper.make_tensor_value_info(scores_tensor, TensorProto.FLOAT, [None, None, None])
+        out_boxes = helper.make_tensor_value_info("boxes", TensorProto.FLOAT, [None, 8400, 4])
+        out_scores = helper.make_tensor_value_info("scores", TensorProto.FLOAT, [None, 80, 8400])
+
+        for n in model.graph.node:
+            for idx, out in enumerate(n.output):
+                if out == box_in:
+                    n.output[idx] = "boxes"
+                elif out == score_in:
+                    n.output[idx] = "scores"
+
         model.graph.output.extend([out_boxes, out_scores])
 
         onnx.checker.check_model(model)
@@ -135,7 +93,7 @@ def prune_rtmdet_postprocessing(input_onnx: Path, output_onnx: Path) -> bool:
         onnx.save(model, str(output_onnx))
         return True
     except Exception as e:
-        print(f"[NOTE] Could not prune RTMDet post-processing in ONNX: {e}")
+        print(f"[NOTE] Could not prune PP-YOLOE post-processing in ONNX: {e}")
         return False
 
 
@@ -180,11 +138,11 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
         clean_onnx = work_dir / f"{model_info.name}_clean.onnx"
         if not clean_onnx.exists():
             print(f"Optimizing ONNX graph for {model_info.name}...")
-            if model_info.architecture == "YOLOX":
-                if not patch_yolox_focus_layer(input_path, clean_onnx):
+            if model_info.architecture == "YOLOv6":
+                if not prepare_yolov6_heads(input_path, clean_onnx):
                     shutil.copyfile(input_path, clean_onnx)
-            elif model_info.architecture == "RTMDet":
-                if not prune_rtmdet_postprocessing(input_path, clean_onnx):
+            elif model_info.architecture == "PPYOLOE":
+                if not prune_ppyoloe_postprocessing(input_path, clean_onnx):
                     shutil.copyfile(input_path, clean_onnx)
             else:
                 shutil.copyfile(input_path, clean_onnx)
@@ -211,16 +169,16 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
         except Exception:
             pass
 
-        # Generate representative calibration dataset
-        calib_path = work_dir / f"calibration_v2_{model_info.architecture.lower()}_{calib_h}x{calib_w}.npy"
+        # Generate representative calibration dataset using 500 COCO validation images
+        calib_path = work_dir / f"calibration_v3_{model_info.architecture.lower()}_{calib_h}x{calib_w}.npy"
         if not calib_path.exists():
-            print(f"Preparing real calibration dataset for {model_info.name}...")
+            print(f"Preparing 500-image calibration dataset for {model_info.name}...")
             try:
                 import numpy as np
                 from PIL import Image
                 from .downloader import download_calibration_images
 
-                calib_images = download_calibration_images(output_dir.parent / "downloads", max_images=32)
+                calib_images = download_calibration_images(output_dir.parent / "downloads", max_images=500)
                 samples = []
                 for img_p in calib_images:
                     with Image.open(img_p) as im:
@@ -235,19 +193,20 @@ def build_model(model_info: ModelInfo, input_path: Path, output_dir: Path) -> Op
                         pad_y = (calib_h - nh) // 2
                         canvas.paste(im_resized, (pad_x, pad_y))
 
-                        arr = np.array(canvas, dtype=np.float32)
-                        arr_bgr = arr[:, :, ::-1].copy()
+                        arr_rgb = np.array(canvas, dtype=np.float32)
 
-                        if model_info.architecture == "YOLOX":
-                            # YOLOX expects BGR in range [0.0, 255.0]
-                            samples.append(arr_bgr)
+                        if model_info.architecture == "YOLOv6":
+                            # YOLOv6 expects RGB normalized to [0.0, 1.0] or [0.0, 255.0]
+                            # Using [0.0, 1.0] matches standard YOLOv6 training
+                            samples.append(arr_rgb / 255.0)
+                        elif model_info.architecture == "PPYOLOE":
+                            # PP-YOLOE expects RGB with ImageNet normalization on [0.0, 1.0] scale
+                            norm_rgb = arr_rgb / 255.0
+                            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+                            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+                            samples.append((norm_rgb - mean) / std)
                         else:
-                            # RTMDet from MMDetection expects BGR with ImageNet normalization:
-                            # mean = [103.53, 116.28, 123.675], std = [57.375, 57.12, 58.395]
-                            mean = np.array([103.53, 116.28, 123.675], dtype=np.float32)
-                            std = np.array([57.375, 57.12, 58.395], dtype=np.float32)
-                            norm_bgr = (arr_bgr - mean) / std
-                            samples.append(norm_bgr)
+                            samples.append(arr_rgb / 255.0)
 
                 calib_data = np.stack(samples, axis=0)
                 np.save(str(calib_path), calib_data)
